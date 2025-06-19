@@ -313,8 +313,40 @@ def generate_transactions(df_funds, df_holdings, df_asset_valuations, start_date
         asset_valuation_series = pd.Series()
         if not df_asset_valuations.empty and asset_id in df_asset_valuations.index:
             asset_valuation_series = df_asset_valuations.loc[asset_id, 'price_or_value']
-            asset_valuation_series = asset_valuation_series[(asset_valuation_series.index.date >= holding["acquisition_date"]) & (asset_valuation_series.index.date <= end_date_transactions)]
-        
+            asset_valuation_series = asset_valuation_series[
+                (asset_valuation_series.index.date >= holding["acquisition_date"]) &
+                (asset_valuation_series.index.date <= end_date_transactions)
+            ]
+            
+         # Determine the price for the specific transaction date
+        current_price_for_date = None # Initialize to None
+
+        if not asset_valuation_series.empty:
+            # Try to get the exact price for the transaction date first
+            exact_price = asset_valuation_series.get(pd.Timestamp(tx_date, tz=london_tz), None)
+            
+            if exact_price is not None:
+                current_price_for_date = exact_price
+            else:
+                # If no exact price, try to find the last valid observation before or at tx_date
+                # We need to make sure the index is sorted for asof to work reliably
+                asset_valuation_series_sorted = asset_valuation_series.sort_index()
+                
+                # asof will return NaN if tx_date is before the first index value
+                asof_price = asset_valuation_series_sorted.asof(pd.Timestamp(tx_date, tz=london_tz))
+                
+                if pd.isna(asof_price): # Check for NaN explicitly
+                    # If asof returns NaN (meaning no prior or exact value),
+                    # use the first available price for the asset
+                    if not asset_valuation_series_sorted.empty:
+                        current_price_for_date = asset_valuation_series_sorted.iloc[0]
+                    else:
+                        current_price_for_date = 100.0 # Fallback default if still no price found
+                else:
+                    current_price_for_date = asof_price
+        else:
+            # If asset_valuation_series is entirely empty for this asset, use a default
+            current_price_for_date = 100.0 # Default fallback price for any transaction
         if asset_valuation_series.empty and not df_asset_valuations.empty: # Fallback for assets not in valuation series but in master
              # Just use a dummy price for transactions if no historical data is generated.
              # This means transactions might not reflect realistic price changes, but will still be created.
