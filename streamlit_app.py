@@ -1,55 +1,46 @@
+# combined_app.py
+
 import streamlit as st
 import pandas as pd
 import numpy as np
-from faker import Faker
+from faker import Faker # Faker is still needed here for initial fake object for some reasons and the seed.
 import random
 from datetime import datetime, timedelta
 import pytz
 import altair as alt
 
-# Assuming you've created a file named `data_generator.py`
-# and moved the generation functions and config dictionaries into it.
-from data_generator import generate_asset_master, generate_funds_and_holdings, generate_transactions, ASSET_UNIVERSE, FUND_TYPE_CONFIG
+# --- Custom Imports from data_generator.py ---
+from data_generator import (
+    generate_asset_master, 
+    generate_funds_and_holdings, 
+    generate_transactions, 
+    ASSET_UNIVERSE, 
+    FUND_TYPE_CONFIG,
+    ASSET_TYPE_COST_PROFILES # This is new and important!
+)
 
-# --- Database Connection Configuration (IMPORTANT: Use Streamlit Secrets) ---
-# For Snowflake:
-# st.secrets["snowflake"]["user"]
-# st.secrets["snowflake"]["password"]
-# st.secrets["snowflake"]["account"]
-# ... etc.
+# Initialize Faker (used for seeding in this app)
+fake = Faker('en_US') 
 
-# For MotherDuck:
-# st.secrets["motherduck"]["token"]
 
-# --- 1. Data Generation Configuration (from previous fund_data_generator_app.py) ---
-# Define ASSET_UNIVERSE, FUND_TYPE_CONFIG
-# ... (copy ASSET_UNIVERSE and FUND_TYPE_CONFIG dictionaries here) ...
-# You can also move these to a separate `config.py` file and import them.
-
-# --- 2. Data Generation Functions (from previous fund_data_generator_app.py) ---
-# Copy generate_asset_master, generate_funds_and_holdings, generate_transactions here
-# (or import from a `data_generator.py` file if preferred for modularity)
-# Make sure to remove st.cache_data from these generation functions if they are *always*
-# triggered when the app starts, or use a custom caching mechanism based on user input flags.
-# However, if generation is a button click, st.cache_data is still useful.
-# ... (copy generate_asset_master, generate_funds_and_holdings, generate_transactions functions here) ...
-
-# --- 3. Cost Model Specifics (from previous cost_estimator_app.py) ---
-# Define ASSET_TYPE_COST_PROFILES
-# ... (copy ASSET_TYPE_COST_PROFILES dictionary here) ...
-
-# --- 4. Cost Model Functions (from previous cost_estimator_app.py) ---
-# Copy enhance_asset_master_with_cost_factors and calculate_fund_administration_costs here
-# ... (copy enhance_asset_master_with_cost_factors, calculate_fund_administration_costs functions here) ...
-
-# --- 5. Database Interaction Functions ---
-# THESE ARE PLACEHOLDERS. YOU NEED TO IMPLEMENT THEM WITH YOUR ACTUAL CREDENTIALS AND TABLE SCHEMAS.
+# --- Database Connection Configuration ---
+# IMPORTANT: Store your actual credentials securely in .streamlit/secrets.toml
+# Example for .streamlit/secrets.toml:
+# [snowflake]
+# user = "your_snowflake_user"
+# password = "your_snowflake_password"
+# account = "your_snowflake_account_identifier"
+# warehouse = "your_snowflake_warehouse"
+# database = "your_snowflake_database"
+# schema = "your_snowflake_schema"
+#
+# [motherduck]
+# token = "your_motherduck_access_token_here"
 
 def get_db_connection(db_type):
     if db_type == "Snowflake":
-        # Install: pip install snowflake-connector-python
-        import snowflake.connector
         try:
+            import snowflake.connector
             conn = snowflake.connector.connect(
                 user=st.secrets["snowflake"]["user"],
                 password=st.secrets["snowflake"]["password"],
@@ -61,55 +52,40 @@ def get_db_connection(db_type):
             return conn
         except Exception as e:
             st.error(f"Snowflake connection failed: {e}")
+            st.info("Ensure Snowflake credentials are set correctly in `.streamlit/secrets.toml`.")
             return None
     elif db_type == "MotherDuck":
-        # Install: pip install duckdb motherduck
-        import duckdb # Make sure this is installed: pip install duckdb motherduck
-
-def get_db_connection(db_type):
-    if db_type == "Snowflake":
-        # ... (Snowflake connection logic from previous code) ...
-        pass # Placeholder for brevity, assuming it's already there
-    elif db_type == "MotherDuck":
         try:
-            # Get token securely from Streamlit secrets
+            import duckdb
+            # Ensure motherduck extension is available via pip install motherduck
             md_token = st.secrets["motherduck"]["token"]
-            
-            # Connect to MotherDuck. 
-            # You can optionally specify a database name, e.g., "md:my_database_name"
-            # If you don't specify one, it often defaults to 'my_db' if you have one.
-            # Using ?motherduck_token= ensures the token is passed
             conn = duckdb.connect(f'md:?motherduck_token={md_token}')
-            
-            # Optionally, you can set the token as a session variable if you prefer
-            # conn.execute(f"SET motherduck.token = '{md_token}';") # If connecting without token in string
-
-            # Load MotherDuck extension (required for cloud access)
             conn.execute("INSTALL motherduck; LOAD motherduck;") 
-            
             return conn
         except Exception as e:
             st.error(f"MotherDuck connection failed: {e}")
-            st.info("Ensure `motherduck_token` is set correctly in `.streamlit/secrets.toml` and `duckdb` and `motherduck` packages are installed.")
+            st.info("Ensure `motherduck_token` is set correctly in `.streamlit/secrets.toml` and `duckdb`/`motherduck` packages are installed.")
             return None
     return None
 
 def write_data_to_db(df, table_name, db_type, conn):
-    if conn is None: return False
+    if conn is None or df.empty: 
+        st.warning(f"No data to write to {table_name} or no DB connection.")
+        return False
     st.info(f"Attempting to write {len(df)} rows to {table_name} in {db_type}...")
     try:
         if db_type == "Snowflake":
-            # ... (Snowflake writing logic) ...
-            pass # Placeholder
+            from snowflake.connector.pandas import write_pandas
+            success, n_chunks, n_rows = write_pandas(conn, df, table_name.upper(), auto_create_table=True, overwrite=True)
+            if success:
+                st.success(f"Successfully wrote {n_rows} rows to Snowflake table {table_name.upper()}.")
+                return True
+            else:
+                st.error(f"Failed to write to Snowflake table {table_name.upper()}.")
+                return False
         elif db_type == "MotherDuck":
-            # DuckDB (MotherDuck) can directly read from Pandas DataFrames in the Python environment.
-            # Convert table_name to lowercase as is common practice in DuckDB
             md_table_name = table_name.lower() 
-            
-            # Drop table if it exists (for fresh writes)
             conn.execute(f"DROP TABLE IF EXISTS {md_table_name};")
-            
-            # Create table and insert data from DataFrame
             conn.execute(f"CREATE TABLE {md_table_name} AS SELECT * FROM df") 
             st.success(f"Successfully wrote {len(df)} rows to MotherDuck table `{md_table_name}`.")
             return True
@@ -123,17 +99,150 @@ def read_data_from_db(table_name, db_type, conn):
     if conn is None: return pd.DataFrame()
     try:
         if db_type == "Snowflake":
-            # ... (Snowflake reading logic) ...
-            pass # Placeholder
+            df = pd.read_sql(f"SELECT * FROM {table_name.upper()}", conn)
         elif db_type == "MotherDuck":
-            md_table_name = table_name.lower()
-            df = conn.execute(f"SELECT * FROM {md_table_name}").fetchdf()
-            st.success(f"Loaded {len(df)} rows from MotherDuck table `{md_table_name}`.")
-            return df
-        return pd.DataFrame()
+            df = conn.execute(f"SELECT * FROM {table_name.lower()}").fetchdf()
+        st.success(f"Loaded {len(df)} rows from {db_type} table {table_name}.")
+        return df
     except Exception as e:
         st.error(f"Failed to read data from {db_type} table {table_name}: {e}")
         return pd.DataFrame()
+
+# --- Cost Model Functions ---
+# Note: ASSET_TYPE_COST_PROFILES is now imported from data_generator.py
+
+@st.cache_data
+def enhance_asset_master_with_cost_factors(df_assets_master_input, df_funds_input):
+    df = df_assets_master_input.copy()
+    
+    # Apply the predefined cost profiles
+    for col in ASSET_TYPE_COST_PROFILES["Equity_ET"].keys(): # Get all cost factor columns
+        df[col] = df["asset_type_category"].map({k: v[col] for k, v in ASSET_TYPE_COST_PROFILES.items()})
+
+    # Add investor count and reporting freq to funds (placeholder for now, would be generated)
+    # This logic assumes df_funds_input is passed in order to determine these.
+    # We do this part of the enhancement for `df_funds_input` here.
+    random.seed(12345) # Consistent seed for this part
+    
+    # Make a copy to avoid modifying original df_funds_input directly if it's cached
+    df_funds_enhanced_for_cost = df_funds_input.copy()
+
+    df_funds_enhanced_for_cost['investor_count'] = df_funds_enhanced_for_cost['initial_aum'].apply(lambda x: int(x / 1_000_000 * random.uniform(5, 20)))
+    
+    df_funds_enhanced_for_cost['reporting_frequency'] = df_funds_enhanced_for_cost['fund_type'].apply(lambda x: 
+        "Daily" if "Equity" in x else 
+        ("Weekly" if "Fixed Income" in x or "Multi-Asset" in x else 
+        ("Monthly" if "Real Estate" in x or "Hedge Fund" in x or "Fund of Funds" in x else "Quarterly"))
+    )
+    df_funds_enhanced_for_cost['custom_reporting_requirements_flag'] = df_funds_enhanced_for_cost['fund_type'].apply(lambda x: random.choice([True, False, False]) if "Hedge" in x or "Private" in x else False)
+
+    return df, df_funds_enhanced_for_cost # Return both enhanced assets and funds
+
+@st.cache_data
+def calculate_fund_administration_costs(
+    df_funds, 
+    df_holdings, 
+    df_assets_master_original, # Original assets master without fund-level columns
+    cost_params, 
+    automation_efficiency
+):
+    # Call the enhancement function locally within this cached function
+    df_assets_enhanced, df_funds_processed = enhance_asset_master_with_cost_factors(df_assets_master_original, df_funds)
+    
+    # Merge holdings with asset cost factors
+    fund_asset_cost_factors = df_holdings.merge(
+        df_assets_enhanced[['base_holding_cost', 'processing_touchpoints', 'reconciliation_effort', 'regulatory_effort', 'pricing_complexity']],
+        left_on='asset_id',
+        right_index=True,
+        how='left'
+    )
+    
+    # Fill NaN values for holdings where asset_id might not have been found 
+    fund_asset_cost_factors = fund_asset_cost_factors.fillna(0)
+
+    # Calculate holding-level costs
+    fund_asset_cost_factors['gross_holding_base_cost'] = fund_asset_cost_factors['base_holding_cost']
+    fund_asset_cost_factors['gross_holding_processing_cost'] = fund_asset_cost_factors['processing_touchpoints'] * cost_params['cost_per_touchpoint']
+    fund_asset_cost_factors['gross_holding_reconciliation_cost'] = fund_asset_cost_factors['reconciliation_effort'] * cost_params['cost_per_reconciliation_effort_unit']
+    fund_asset_cost_factors['gross_holding_regulatory_cost'] = fund_asset_cost_factors['regulatory_effort'] * cost_params['cost_per_regulatory_effort_unit']
+    fund_asset_cost_factors['gross_holding_pricing_cost'] = fund_asset_cost_factors['pricing_complexity'] * cost_params['cost_per_pricing_complexity_unit']
+
+    fund_asset_cost_factors['gross_holding_total_cost'] = (
+        fund_asset_cost_factors['gross_holding_base_cost'] +
+        fund_asset_cost_factors['gross_holding_processing_cost'] +
+        fund_asset_cost_factors['gross_holding_reconciliation_cost'] +
+        fund_asset_cost_factors['gross_holding_regulatory_cost'] +
+        fund_asset_cost_factors['gross_holding_pricing_cost']
+    )
+
+    # Aggregate holding costs to fund level
+    fund_aggregated_asset_costs = fund_asset_cost_factors.groupby('fund_id').agg(
+        total_gross_holding_cost=('gross_holding_total_cost', 'sum'),
+        num_holdings=('asset_id', 'count')
+    ).reset_index()
+
+    # Merge with fund-level data (df_funds_processed now has investor_count, reporting_frequency etc.)
+    df_funds_with_costs = df_funds_processed.merge(
+        fund_aggregated_asset_costs,
+        on='fund_id',
+        how='left'
+    )
+    df_funds_with_costs = df_funds_with_costs.fillna(0) # Fill NaNs for funds with no holdings if any
+
+
+    # Calculate fund-level fixed costs (before automation applies)
+    df_funds_with_costs['base_admin_cost'] = cost_params['base_cost_per_fund_per_month']
+    df_funds_with_costs['aum_based_cost'] = df_funds_with_costs['initial_aum'] * cost_params['aum_based_cost_bps_per_month'] / 10000
+    df_funds_with_costs['investor_based_cost'] = df_funds_with_costs['investor_count'] * cost_params['investor_count_cost_per_investor_per_month']
+    
+    # Reporting frequency cost multiplier
+    reporting_multiplier_map = {
+        "Daily": cost_params['reporting_freq_multiplier_daily'],
+        "Weekly": cost_params['reporting_freq_multiplier_weekly'],
+        "Monthly": cost_params['reporting_freq_multiplier_monthly'],
+        "Quarterly": cost_params['reporting_freq_multiplier_quarterly']
+    }
+    df_funds_with_costs['reporting_cost_multiplier'] = df_funds_with_costs['reporting_frequency'].map(reporting_multiplier_map).fillna(1.0) # Default to 1.0 if not found
+    
+    # Total reporting cost = (base cost per holding reporting * num holdings) * freq multiplier
+    df_funds_with_costs['total_reporting_cost'] = (
+        df_funds_with_costs['num_holdings'] * cost_params['cost_per_holding_reporting'] * df_funds_with_costs['reporting_cost_multiplier']
+    )
+    df_funds_with_costs['custom_reporting_cost'] = df_funds_with_costs['custom_reporting_requirements_flag'] * cost_params['cost_per_custom_report_flag']
+
+    # --- Gross Cost (Before Automation) ---
+    df_funds_with_costs['gross_admin_cost_per_month'] = (
+        df_funds_with_costs['base_admin_cost'] +
+        df_funds_with_costs['aum_based_cost'] +
+        df_funds_with_costs['investor_based_cost'] +
+        df_funds_with_costs['total_gross_holding_cost'] + # Sum of all holding related costs
+        df_funds_with_costs['total_reporting_cost'] +
+        df_funds_with_costs['custom_reporting_cost']
+    )
+    
+    # --- Net Cost (After Automation) ---
+    automatable_cost_components = (
+        df_funds_with_costs['investor_based_cost'] +
+        df_funds_with_costs['total_gross_holding_cost'] +
+        df_funds_with_costs['total_reporting_cost'] +
+        df_funds_with_costs['custom_reporting_cost']
+    )
+    
+    df_funds_with_costs['automation_savings'] = automatable_cost_components * (automation_efficiency / 100)
+    df_funds_with_costs['net_admin_cost_per_month'] = df_funds_with_costs['gross_admin_cost_per_month'] - df_funds_with_costs['automation_savings']
+    
+    df_funds_with_costs['net_admin_cost_per_month'] = df_funds_with_costs['net_admin_cost_per_month'].apply(lambda x: max(x, 0)) # Costs should be >= 0
+
+    # Calculate cost per AUM (bps)
+    df_funds_with_costs['cost_per_aum_bps_gross'] = (df_funds_with_costs['gross_admin_cost_per_month'] / df_funds_with_costs['initial_aum'] * 10000).fillna(0)
+    df_funds_with_costs['cost_per_aum_bps_net'] = (df_funds_with_costs['net_admin_cost_per_month'] / df_funds_with_costs['initial_aum'] * 10000).fillna(0)
+    
+    # Calculate savings in EUR and %
+    df_funds_with_costs['absolute_savings_eur'] = df_funds_with_costs['gross_admin_cost_per_month'] - df_funds_with_costs['net_admin_cost_per_month']
+    df_funds_with_costs['percentage_savings'] = (df_funds_with_costs['absolute_savings_eur'] / df_funds_with_costs['gross_admin_cost_per_month'] * 100).fillna(0)
+
+    return df_funds_with_costs
+
 
 # --- Streamlit UI Layout ---
 st.set_page_config(layout="wide", page_title="Fund Automation Insights", page_icon="📈")
@@ -152,7 +261,9 @@ if db_enabled:
     if db_conn:
         st.sidebar.success(f"Connected to {db_type_selected}.")
     else:
-        st.sidebar.warning(f"Could not connect to {db_type_selected}. Check secrets.")
+        st.sidebar.warning(f"Could not connect to {db_type_selected}. Check secrets and dependencies.")
+        # Disable DB options if connection failed
+        db_enabled = False 
 
 # --- Main App Logic based on Mode ---
 if app_mode == "Generate Synthetic Data":
@@ -173,11 +284,11 @@ if app_mode == "Generate Synthetic Data":
 
     if st.button("Generate New Data", type="primary"):
         with st.spinner("Generating data... this may take a moment for larger datasets."):
-            Faker.seed(random_seed)
-            random.seed(random_seed)
-            np.random.seed(random_seed)
+            Faker.seed(random_seed) # Seed Faker
+            random.seed(random_seed) # Seed random
+            np.random.seed(random_seed) # Seed numpy random
 
-            # Generate Data
+            # Generate Data using functions from data_generator.py
             df_assets_master, df_asset_valuations = generate_asset_master(
                 ASSET_UNIVERSE,
                 start_date=start_date_transactions - timedelta(days=365),
@@ -198,6 +309,7 @@ if app_mode == "Generate Synthetic Data":
                 end_date_transactions
             )
         
+        # Store generated data in session state for reuse
         st.session_state['generated_df_funds'] = df_funds
         st.session_state['generated_df_holdings'] = df_holdings
         st.session_state['generated_df_assets_master'] = df_assets_master
@@ -221,18 +333,24 @@ if app_mode == "Generate Synthetic Data":
         st.dataframe(df_assets_master.head())
         st.download_button(label="Download Assets CSV", data=df_assets_master.to_csv(index=False).encode('utf-8'), file_name="synthetic_assets_master.csv", mime="text/csv")
 
+        st.write("### Transactions")
+        st.dataframe(df_transactions.head())
+        st.download_button(label="Download Transactions CSV", data=df_transactions.to_csv(index=False).encode('utf-8'), file_name="synthetic_transactions.csv", mime="text/csv")
+
+
         # Database Push Option
         if db_enabled and db_conn:
             st.markdown("---")
             st.subheader(f"Push Generated Data to {db_type_selected}")
             if st.button(f"Push Data to {db_type_selected} Tables"):
-                if write_data_to_db(df_funds, "funds", db_type_selected, db_conn):
+                if write_data_to_db(st.session_state['generated_df_funds'], "funds", db_type_selected, db_conn):
                     st.write("Funds data written.")
-                if write_data_to_db(df_holdings, "holdings", db_type_selected, db_conn):
+                if write_data_to_db(st.session_state['generated_df_holdings'], "holdings", db_type_selected, db_conn):
                     st.write("Holdings data written.")
-                if write_data_to_db(df_assets_master.reset_index(), "assets_master", db_type_selected, db_conn): # reset index for writing
+                # For assets_master, reset index before writing to avoid it becoming part of table structure in some DBs
+                if write_data_to_db(st.session_state['generated_df_assets_master'].reset_index(), "assets_master", db_type_selected, db_conn): 
                     st.write("Assets Master data written.")
-                if write_data_to_db(df_transactions, "transactions", db_type_selected, db_conn):
+                if write_data_to_db(st.session_state['generated_df_transactions'], "transactions", db_type_selected, db_conn):
                     st.write("Transactions data written.")
                 st.success("All selected data pushed to database!")
         else:
@@ -247,33 +365,43 @@ elif app_mode == "Analyze Fund Admin Costs":
     # --- Data Loading for Analysis ---
     st.sidebar.subheader("Load Data for Analysis")
     load_analysis_data_source = st.sidebar.radio("Source for Cost Analysis Data", 
-                                                ("Use Last Generated Data", "Load from Database (if enabled)", "Use Sample Data"))
+                                                ("Use Last Generated Data", "Load from Database (if enabled)", "Use Sample Data"),
+                                                key="load_analysis_source")
 
     df_funds_for_analysis = pd.DataFrame()
     df_holdings_for_analysis = pd.DataFrame()
     df_assets_master_for_analysis = pd.DataFrame()
 
     if load_analysis_data_source == "Use Last Generated Data":
-        if 'generated_df_funds' in st.session_state:
+        if 'generated_df_funds' in st.session_state and \
+           'generated_df_holdings' in st.session_state and \
+           'generated_df_assets_master' in st.session_state:
             df_funds_for_analysis = st.session_state['generated_df_funds']
             df_holdings_for_analysis = st.session_state['generated_df_holdings']
             df_assets_master_for_analysis = st.session_state['generated_df_assets_master']
-            st.info("Using data from last generation session.")
+            st.info(f"Using {len(df_funds_for_analysis)} funds from last generation session.")
         else:
             st.warning("No data generated in this session yet. Please go to 'Generate Synthetic Data' mode or select another source.")
     
     elif load_analysis_data_source == "Load from Database (if enabled)":
         if db_enabled and db_conn:
-            if st.button("Load Data from DB"):
+            if st.button("Load Data from DB", key="load_db_btn"):
                 df_funds_for_analysis = read_data_from_db("funds", db_type_selected, db_conn)
                 df_holdings_for_analysis = read_data_from_db("holdings", db_type_selected, db_conn)
-                df_assets_master_for_analysis = read_data_from_db("assets_master", db_type_selected, db_conn).set_index('asset_id')
-                st.success("Data loaded from database.")
+                df_assets_master_for_analysis = read_data_from_db("assets_master", db_type_selected, db_conn)
+                # Set asset_id as index for assets_master, as expected by cost calculation
+                if 'asset_id' in df_assets_master_for_analysis.columns:
+                    df_assets_master_for_analysis = df_assets_master_for_analysis.set_index('asset_id')
+
+                if not df_funds_for_analysis.empty and not df_holdings_for_analysis.empty and not df_assets_master_for_analysis.empty:
+                    st.success("Data loaded from database.")
+                else:
+                    st.warning("Failed to load all required dataframes from database. Check tables/data.")
         else:
             st.warning("Database connection is not enabled or established. Please enable it in the sidebar.")
     
     elif load_analysis_data_source == "Use Sample Data":
-        # Copy sample data from generation mode's 'Load Sample' logic
+        st.info("Using pre-defined sample data for demonstration.")
         df_funds_for_analysis = pd.DataFrame({
             'fund_id': ['f1', 'f2', 'f3', 'f4', 'f5', 'f6', 'f7', 'f8'],
             'fund_name': ['Equity Growth Fund', 'Global Bond Fund', 'Irish Property Fund', 'Multi-Strat HF', 'PE Buyout Fund', 'Emerging Markets FoF', 'Direct Lending Pool', 'Crypto Fund X'],
@@ -285,34 +413,35 @@ elif app_mode == "Analyze Fund Admin Costs":
             'geography_focus': ['Global', 'Eurozone', 'Europe (incl. Ireland)', 'Global', 'Europe', 'Global', 'Europe', 'Global'],
             'is_fo_fund': [False, False, False, False, False, True, False, False]
         })
+        
         df_assets_master_for_analysis = pd.DataFrame({
             'asset_id': ['a1', 'a2', 'a3', 'a4', 'a5', 'a6', 'a7', 'a8', 'a9', 'a10', 'a11', 'a12'],
             'asset_name': ['AAPL', 'US10YT', 'Pre-IPO Tech', 'CRE Loan', 'Private Equity X', 'SPY', 'Corporate Bond PP', 'HF Alpha Fund', 'Ether', 'Oil Futures OTC', 'EURUSD Spot', 'Commercial Building Dublin'],
             'asset_type_category': ['Equity_ET', 'FixedIncome_ET', 'Equity_OTC', 'Loan', 'HardToPrice', 'ETF_ET', 'FixedIncome_OTC', 'FundOfFunds', 'Crypto_ET', 'Commodity_OTC', 'FX_ET', 'HardToPrice'],
             'is_exchange_traded': [True, True, False, False, False, True, False, False, True, False, True, False],
             'is_over_the_counter': [False, False, True, False, False, False, True, False, False, True, False, False],
-            'is_loan': [False, False, False, True, False, False, False, True, False, False, False],
+            'is_loan': [False, False, False, True, False, False, False, False, False, False, False, False],
             'is_hard_to_price': [False, False, False, False, True, False, False, False, False, False, False, True],
             'liquidity_score': [0.9, 0.8, 0.3, 0.2, 0.1, 0.9, 0.4, 0.2, 0.7, 0.5, 0.9, 0.1],
         }).set_index('asset_id')
+
         df_holdings_for_analysis = pd.DataFrame({
             'holding_id': ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'h7', 'h8', 'h9', 'h10', 'h11', 'h12', 'h13', 'h14', 'h15', 'h16', 'h17', 'h18'],
             'fund_id': ['f1', 'f1', 'f2', 'f2', 'f3', 'f3', 'f4', 'f4', 'f5', 'f5', 'f6', 'f6', 'f7', 'f7', 'f8', 'f8', 'f1', 'f2'],
-            'asset_id': ['a1', 'a6', 'a2', 'a7', 'a4', 'a12', 'a1', 'a8', 'a3', 'a5', 'f1', 'f2', 'a4', 'a10', 'a9', 'a11', 'a9', 'a11'],
+            'asset_id': ['a1', 'a6', 'a2', 'a7', 'a4', 'a12', 'a1', 'a8', 'a3', 'a5', 'f1', 'f2', 'a4', 'a10', 'a9', 'a11', 'a9', 'a11'], # f1, f2 are underlying funds for f6
             'allocation_percentage': [0.5, 0.5, 0.6, 0.4, 0.7, 0.3, 0.8, 0.2, 0.6, 0.4, 0.5, 0.5, 0.6, 0.4, 0.7, 0.3, 0.1, 0.1],
         })
         # Apply investor count and reporting freq to sample funds
-        df_funds_for_analysis = enhance_asset_master_with_cost_factors(df_assets_master_for_analysis).pipe(lambda x: df_funds_for_analysis.merge(x[['investor_count', 'reporting_frequency', 'custom_reporting_requirements_flag']], left_on='fund_id', right_index=True, how='left', suffixes=('_x','')))
-        df_funds_for_analysis = df_funds_for_analysis.loc[:,~df_funds_for_analysis.columns.duplicated()]
-        df_funds_for_analysis[['investor_count', 'custom_reporting_requirements_flag']] = df_funds_for_analysis[['investor_count', 'custom_reporting_requirements_flag']].fillna({'investor_count': 20, 'custom_reporting_requirements_flag': False})
-        df_funds_for_analysis['reporting_frequency'] = df_funds_for_analysis['reporting_frequency'].fillna("Monthly")
+        # This will call enhance_asset_master_with_cost_factors to get the fund-level enhancements
+        _, df_funds_for_analysis = enhance_asset_master_with_cost_factors(df_assets_master_for_analysis, df_funds_for_analysis)
+
 
     # Only show the rest of the app if data is loaded for analysis
     if not df_funds_for_analysis.empty and not df_holdings_for_analysis.empty and not df_assets_master_for_analysis.empty:
         st.sidebar.markdown("---")
         st.sidebar.subheader("Cost Parameters (Per Month)")
 
-        # --- User-definable Cost Parameters ---
+        # ... (Cost Parameter Sliders - copy from previous combined app) ...
         cost_params = {}
         cost_params['base_cost_per_fund_per_month'] = st.sidebar.number_input("Base Fund Cost (€)", value=500.0, step=50.0, key="cp_base_fund_cost")
         cost_params['aum_based_cost_bps_per_month'] = st.sidebar.number_input("AUM-based Cost (bps)", value=0.005, step=0.001, format="%.3f", help="Cost per 10,000 units of AUM", key="cp_aum_cost")
