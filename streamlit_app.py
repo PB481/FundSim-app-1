@@ -11,12 +11,12 @@ import altair as alt
 
 # --- Custom Imports from data_generator.py ---
 from data_generator import (
-    generate_asset_master, 
-    generate_funds_and_holdings, 
-    generate_transactions, 
-    ASSET_UNIVERSE, 
+    generate_asset_master,
+    generate_funds_and_holdings,
+    generate_transactions,
+    ASSET_UNIVERSE,
     FUND_TYPE_CONFIG,
-    ASSET_TYPE_COST_PROFILES # This is new and important!
+    ASSET_TYPE_COST_PROFILES
 )
 
 # Initialize Faker (used for seeding in this app)
