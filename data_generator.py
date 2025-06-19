@@ -109,10 +109,6 @@ ASSET_TYPE_COST_PROFILES = {
 
 # --- Utility Functions for Data Generation ---
 
-# Removed @st.cache_data decorators from these functions in data_generator.py
-# because they are meant to be imported and called from streamlit_app.py,
-# where Streamlit's caching will be applied.
-
 def generate_asset_master(asset_universe, start_date, end_date, price_variance=0.01, loan_rate_variance=0.001):
     """Generates a master list of synthetic assets with historical data."""
     assets_data = []
@@ -123,75 +119,66 @@ def generate_asset_master(asset_universe, start_date, end_date, price_variance=0
     start_dt = london_tz.localize(datetime.combine(start_date, datetime.min.time()))
     end_dt = london_tz.localize(datetime.combine(end_date, datetime.min.time()))
     
-    current_date = start_dt
-    while current_date <= end_dt:
-        for asset_type, assets in asset_universe.items():
-            for asset_name in assets:
-                asset_id = f"{asset_type}_{asset_name.replace(' ', '_').replace('-', '_')}"
-                if asset_id not in asset_prices:
-                    # Initial asset data and price/valuation
-                    initial_val = round(random.uniform(50, 2000), 2)
-                    if asset_type == "Loan":
-                        initial_val = round(random.uniform(1_000_000, 100_000_000), 2) # Loan principal
-                    elif asset_type == "HardToPrice":
-                        initial_val = round(random.uniform(5_000_000, 500_000_000), 2)
+    # Generate prices for every day from start_dt to end_dt
+    date_range = pd.date_range(start=start_dt, end=end_dt, freq='D', tz=london_tz)
 
-                    assets_data.append({
-                        "asset_id": asset_id,
-                        "asset_name": asset_name,
-                        "asset_type_category": asset_type,
-                        "is_exchange_traded": "ET" in asset_type,
-                        "is_over_the_counter": "OTC" in asset_type,
-                        "is_loan": asset_type == "Loan",
-                        "is_hard_to_price": asset_type == "HardToPrice",
-                        "inception_date": fake.date_between(start_date='-5y', end_date=start_date),
-                        "initial_price_or_value": initial_val,
-                        "currency": random.choice(["USD", "EUR", "GBP"]), # Could refine this based on asset
-                        "liquidity_score": round(random.uniform(0.1, 1.0), 2) # 1.0 is highly liquid
-                    })
-                    asset_prices[asset_id] = [initial_val] # Start time series
-                else:
-                    # Simulate price/valuation movement
-                    last_price = asset_prices[asset_id][-1]
-                    if "ET" in asset_type or "FX" in asset_type or "Crypto" in asset_type:
-                        # Random walk for ET assets
-                        change = np.random.normal(0, price_variance)
-                        new_price = last_price * (1 + change)
-                        new_price = max(1.0, new_price) # Price doesn't go below 1
-                        asset_prices[asset_id].append(round(new_price, 2))
-                    elif asset_type == "Loan":
-                        # Loans are relatively stable, slight changes for accruals/credit risk
-                        change = np.random.normal(0, loan_rate_variance)
-                        new_val = last_price * (1 + change)
-                        asset_prices[asset_id].append(round(new_val, 2))
-                    elif asset_type == "HardToPrice":
-                        # Hard to price assets update infrequently and less volatile
-                        if random.random() < 0.05: # 5% chance of update per day
-                            change = np.random.normal(0, price_variance * 0.1) # Less volatile
-                            new_val = last_price * (1 + change)
-                            asset_prices[asset_id].append(round(new_val, 2))
-                        else:
-                            asset_prices[asset_id].append(last_price) # No change
-                    else: # OTC
-                         if random.random() < 0.15: # 15% chance of update per day
-                            change = np.random.normal(0, price_variance * 0.5) # Some volatility
-                            new_val = last_price * (1 + change)
-                            asset_prices[asset_id].append(round(new_val, 2))
-                         else:
-                            asset_prices[asset_id].append(last_price) # No change
+    for asset_type, assets in asset_universe.items():
+        for asset_name in assets:
+            asset_id = f"{asset_type}_{asset_name.replace(' ', '_').replace('-', '_')}"
+            
+            # Initial asset data
+            initial_val = round(random.uniform(50, 2000), 2)
+            if asset_type == "Loan":
+                initial_val = round(random.uniform(1_000_000, 100_000_000), 2) # Loan principal
+            elif asset_type == "HardToPrice":
+                initial_val = round(random.uniform(5_000_000, 500_000_000), 2)
 
-        current_date += timedelta(days=1)
-    
+            assets_data.append({
+                "asset_id": asset_id,
+                "asset_name": asset_name,
+                "asset_type_category": asset_type,
+                "is_exchange_traded": "ET" in asset_type,
+                "is_over_the_counter": "OTC" in asset_type,
+                "is_loan": asset_type == "Loan",
+                "is_hard_to_price": asset_type == "HardToPrice",
+                "inception_date": fake.date_between(start_date='-5y', end_date=start_date),
+                "initial_price_or_value": initial_val,
+                "currency": random.choice(["USD", "EUR", "GBP"]), # Could refine this based on asset
+                "liquidity_score": round(random.uniform(0.1, 1.0), 2) # 1.0 is highly liquid
+            })
+            
+            # Generate price history for this asset
+            current_price = initial_val
+            daily_prices = []
+            for _ in date_range: # Loop through each date
+                if "ET" in asset_type or "FX" in asset_type or "Crypto" in asset_type:
+                    change = np.random.normal(0, price_variance)
+                    current_price *= (1 + change)
+                    current_price = max(1.0, current_price) # Price doesn't go below 1
+                elif asset_type == "Loan":
+                    change = np.random.normal(0, loan_rate_variance)
+                    current_price *= (1 + change) # Loan values are relatively stable
+                elif asset_type == "HardToPrice":
+                    if random.random() < 0.05: # 5% chance of update per day
+                        change = np.random.normal(0, price_variance * 0.1)
+                        current_price *= (1 + change)
+                else: # OTC
+                    if random.random() < 0.15: # 15% chance of update per day
+                        change = np.random.normal(0, price_variance * 0.5)
+                        current_price *= (1 + change)
+                daily_prices.append(round(current_price, 2))
+            asset_prices[asset_id] = daily_prices
+
     df_assets = pd.DataFrame(assets_data).drop_duplicates(subset=["asset_id"]).set_index("asset_id")
 
     # Create daily prices/valuations DataFrame
-    dates = pd.date_range(start=start_dt, end=end_dt, freq='D', tz=london_tz)
     price_history_records = []
     for asset_id, prices in asset_prices.items():
         for i, price in enumerate(prices):
-            if i < len(dates): # Ensure we don't go out of bounds if asset_prices is longer
+            # Ensure we don't go out of bounds if prices list is longer than date_range (shouldn't be)
+            if i < len(date_range): 
                 price_history_records.append({
-                    "valuation_date": dates[i].date(), # Store as date object
+                    "valuation_date": date_range[i].date(), # Store as date object
                     "asset_id": asset_id,
                     "price_or_value": price
                 })
@@ -201,6 +188,7 @@ def generate_asset_master(asset_universe, start_date, end_date, price_variance=0
 
 
 def generate_funds_and_holdings(num_funds, fund_type_config, df_assets_master, start_date_transactions, end_date_transactions):
+    """Generates synthetic fund and holding data."""
     funds = []
     holdings = []
     
@@ -234,7 +222,7 @@ def generate_funds_and_holdings(num_funds, fund_type_config, df_assets_master, s
         funds.append(fund_record)
 
         if not fund_record["is_fo_fund"]:
-            potential_underlying_funds.append(fund_id)
+            potential_underlying_funds.append(fund_id) # Only non-FoF funds can be underlying funds here
 
         num_holdings = random.randint(*config["num_holdings_range"])
         
@@ -243,6 +231,7 @@ def generate_funds_and_holdings(num_funds, fund_type_config, df_assets_master, s
             asset_category = random.choice(config["asset_types_pool"])
             
             asset_choice = None
+            # Prioritize picking from relevant asset lists, fall back if list is empty
             if asset_category == "Equity_ET" and et_assets: asset_choice = random.choice(et_assets)
             elif asset_category == "FixedIncome_ET" and et_assets: asset_choice = random.choice(et_assets)
             elif asset_category == "ETF_ET" and et_assets: asset_choice = random.choice(et_assets)
@@ -254,12 +243,13 @@ def generate_funds_and_holdings(num_funds, fund_type_config, df_assets_master, s
             elif asset_category == "Loan" and loan_assets: asset_choice = random.choice(loan_assets)
             elif asset_category == "HardToPrice" and hard_to_price_assets: asset_choice = random.choice(hard_to_price_assets)
             elif asset_category == "FundOfFunds" and potential_underlying_funds:
-                # For FoF, select another *synthetic fund* as a holding
                 asset_choice = random.choice(potential_underlying_funds)
             
-            if asset_choice and asset_choice not in selected_holding_assets: # Avoid duplicate holdings within a fund for simplicity
+            # Ensure unique assets for each fund's holdings for simplicity, and check if asset_choice was successfully made
+            if asset_choice and asset_choice not in selected_holding_assets:
                 selected_holding_assets.append(asset_choice)
 
+        # Special handling for FoF if it couldn't pick enough unique underlying funds
         if fund_type_name == "Fund of Funds (FoF)" and not selected_holding_assets and potential_underlying_funds:
              selected_holding_assets = random.sample(potential_underlying_funds, min(num_holdings, len(potential_underlying_funds)))
 
@@ -268,8 +258,15 @@ def generate_funds_and_holdings(num_funds, fund_type_config, df_assets_master, s
             # Distribute allocation, ensuring sum is 1.0
             allocations = [random.uniform(0.01, 0.2) for _ in selected_holding_assets]
             total_sum = sum(allocations)
-            allocations = [round(alloc / total_sum, 4) for alloc in allocations] # Normalize and round
-            allocations[-1] += (1.0 - sum(allocations)) # Adjust last one to ensure sum is exactly 1.0
+            
+            # Handle case where total_sum might be zero (e.g., if selected_holding_assets was empty)
+            if total_sum > 0:
+                allocations = [round(alloc / total_sum, 4) for alloc in allocations] # Normalize and round
+                # Ensure sum is exactly 1.0 by adjusting the last allocation
+                allocations[-1] = round(allocations[-1] + (1.0 - sum(allocations)), 4)
+            else:
+                allocations = [round(1.0 / len(selected_holding_assets), 4)] * len(selected_holding_assets)
+
 
             for j, asset_id in enumerate(selected_holding_assets):
                 holdings.append({
@@ -284,21 +281,20 @@ def generate_funds_and_holdings(num_funds, fund_type_config, df_assets_master, s
 
 
 def generate_transactions(df_funds, df_holdings, df_asset_valuations, start_date_transactions, end_date_transactions):
-    """Generates synthetic transaction data."""
+    """
+    Generates synthetic transaction data for holdings.
+    Handles asset valuations more robustly.
+    """
     transactions = []
     
     # Prepare valuation data for quick lookup
-    # This function expects df_asset_valuations to have 'valuation_date' as datetime or already processed.
-    # For this simplified generator, it might not be fully used or simplified further.
-    if not df_asset_valuations.empty:
-        df_asset_valuations['valuation_date'] = pd.to_datetime(df_asset_valuations['valuation_date'])
-        df_asset_valuations = df_asset_valuations.set_index(['asset_id', 'valuation_date'])
+    # Ensure valuation_date is datetime and set as part of MultiIndex for efficient .loc access
+    df_asset_valuations['valuation_date'] = pd.to_datetime(df_asset_valuations['valuation_date'])
+    df_asset_valuations_indexed = df_asset_valuations.set_index(['asset_id', 'valuation_date']).sort_index()
 
     # Timezone aware dates for transaction period
     london_tz = pytz.timezone('Europe/London')
-    start_dt = london_tz.localize(datetime.combine(start_date_transactions, datetime.min.time()))
-    end_dt = london_tz.localize(datetime.combine(end_date_transactions, datetime.min.time()))
-
+    
     transaction_types = ["Buy", "Sell", "Dividend", "Interest", "Fee", "Expense", "Capital Call", "Distribution"]
 
     # Simple model to track fund balances (not full NAV, just conceptual)
@@ -310,54 +306,36 @@ def generate_transactions(df_funds, df_holdings, df_asset_valuations, start_date
         fund_currency = df_funds.loc[df_funds["fund_id"] == fund_id, "currency"].iloc[0] # Get fund currency
         
         # Get historical prices for the asset
-        asset_valuation_series = pd.Series()
-        if not df_asset_valuations.empty and asset_id in df_asset_valuations.index:
-            asset_valuation_series = df_asset_valuations.loc[asset_id, 'price_or_value']
+        # Check if asset_id exists in the multi-index before trying to slice
+        asset_valuation_series = pd.Series(dtype=float) # Initialize as empty Series
+        if asset_id in df_asset_valuations_indexed.index:
+            asset_valuation_series = df_asset_valuations_indexed.loc[asset_id, 'price_or_value']
+            # Ensure the series index is datetime and apply timezone for asof comparison
+            asset_valuation_series.index = pd.to_datetime(asset_valuation_series.index).tz_localize(london_tz, errors='coerce')
+            # Filter for relevant dates (from acquisition to end of transaction period)
             asset_valuation_series = asset_valuation_series[
                 (asset_valuation_series.index.date >= holding["acquisition_date"]) &
                 (asset_valuation_series.index.date <= end_date_transactions)
-            ]
-            
-         # Determine the price for the specific transaction date
-        current_price_for_date = None # Initialize to None
+            ].sort_index() # Crucial for asof to work correctly
 
-        if not asset_valuation_series.empty:
-            # Try to get the exact price for the transaction date first
-            exact_price = asset_valuation_series.get(pd.Timestamp(tx_date, tz=london_tz), None)
-            
-            if exact_price is not None:
-                current_price_for_date = exact_price
-            else:
-                # If no exact price, try to find the last valid observation before or at tx_date
-                # We need to make sure the index is sorted for asof to work reliably
-                asset_valuation_series_sorted = asset_valuation_series.sort_index()
-                
-                # asof will return NaN if tx_date is before the first index value
-                asof_price = asset_valuation_series_sorted.asof(pd.Timestamp(tx_date, tz=london_tz))
-                
-                if pd.isna(asof_price): # Check for NaN explicitly
-                    # If asof returns NaN (meaning no prior or exact value),
-                    # use the first available price for the asset
-                    if not asset_valuation_series_sorted.empty:
-                        current_price_for_date = asset_valuation_series_sorted.iloc[0]
-                    else:
-                        current_price_for_date = 100.0 # Fallback default if still no price found
-                else:
-                    current_price_for_date = asof_price
-        else:
-            # If asset_valuation_series is entirely empty for this asset, use a default
-            current_price_for_date = 100.0 # Default fallback price for any transaction
-        if asset_valuation_series.empty and not df_asset_valuations.empty: # Fallback for assets not in valuation series but in master
-             # Just use a dummy price for transactions if no historical data is generated.
-             # This means transactions might not reflect realistic price changes, but will still be created.
-             pass
+        # If asset_valuation_series is empty after filtering, assign a default price.
+        # This can happen if the asset's inception_date is after the transaction period.
+        default_price_fallback = 100.0 
 
-
-        # Simulate initial acquisition transaction if it's within the transaction date range
+        # --- Initial acquisition transaction (if applicable) ---
         if holding["acquisition_date"] >= start_date_transactions:
-            acquisition_price = 100.0 # Default if no actual valuation series
-            if not asset_valuation_series.empty:
-                 acquisition_price = asset_valuation_series.iloc[0] if not asset_valuation_series.empty else df_asset_valuations.loc[asset_id, 'price_or_value'].iloc[0]
+            # Get acquisition price: prefer exact date, then asof, then default
+            acquisition_price_ts = pd.Timestamp(holding["acquisition_date"], tz=london_tz)
+            acquisition_price = asset_valuation_series.get(acquisition_price_ts, None)
+
+            if acquisition_price is None and not asset_valuation_series.empty:
+                asof_price = asset_valuation_series.asof(acquisition_price_ts)
+                if pd.isna(asof_price): # If asof also returns NaN
+                    acquisition_price = asset_valuation_series.iloc[0] if not asset_valuation_series.empty else default_price_fallback
+                else:
+                    acquisition_price = asof_price
+            elif acquisition_price is None: # Series was empty to begin with
+                acquisition_price = default_price_fallback
 
             initial_units = (fund_conceptual_balances[fund_id]["cash"] * holding["allocation_percentage"]) / acquisition_price if acquisition_price > 0 else 0
             
@@ -372,23 +350,31 @@ def generate_transactions(df_funds, df_holdings, df_asset_valuations, start_date
                     "units": round(initial_units, 4),
                     "price_per_unit": round(acquisition_price, 2),
                     "currency": fund_currency,
-                    "description": f"Initial acquisition of {asset_id}" # Used asset_id directly here
+                    "description": f"Initial acquisition of {df_assets_master.loc[asset_id]['asset_name']}" # Use asset_name for description
                 })
                 fund_conceptual_balances[fund_id]["cash"] -= round(initial_units * acquisition_price, 2)
                 fund_conceptual_balances[fund_id]["assets_value"] += round(initial_units * acquisition_price, 2)
         
-        # Simulate ongoing transactions (Buys/Sells/Income/Fees)
+        # --- Simulate ongoing transactions (Buys/Sells/Income/Fees) ---
         num_holding_transactions = random.randint(1, 10) # 1-10 transactions per holding over period
         for _ in range(num_holding_transactions):
-            tx_date = fake.date_between(start_date=max(holding["acquisition_date"], start_date_transactions), end_date=end_date_transactions)
+            # Generate transaction date within the holding's relevant period
+            tx_date_dt = fake.date_between(start_date=max(holding["acquisition_date"], start_date_transactions), end_date=end_date_transactions)
+            tx_date_ts = pd.Timestamp(tx_date_dt, tz=london_tz) # Convert to Timestamp for asof
+            
             tx_type = random.choice(transaction_types)
             amount = round(random.uniform(100, 500000), 2)
             
-            current_price_for_date = 100.0 # Default if no actual valuation
-            if not asset_valuation_series.empty:
-                current_price_for_date = asset_valuation_series.get(pd.Timestamp(tx_date, tz=london_tz), None)
-                if current_price_for_date is None and not asset_valuation_series.empty:
-                    current_price_for_date = asset_valuation_series.asof(pd.Timestamp(tx_date, tz=london_tz))
+            # Determine price for transaction date using robust logic
+            current_price_for_date = asset_valuation_series.get(tx_date_ts, None)
+            if current_price_for_date is None and not asset_valuation_series.empty:
+                asof_price = asset_valuation_series.asof(tx_date_ts)
+                if pd.isna(asof_price):
+                    current_price_for_date = asset_valuation_series.iloc[0] if not asset_valuation_series.empty else default_price_fallback
+                else:
+                    current_price_for_date = asof_price
+            elif current_price_for_date is None:
+                current_price_for_date = default_price_fallback
 
             units = 0
             if current_price_for_date is not None and current_price_for_date > 0 and tx_type in ["Buy", "Sell"]:
@@ -398,11 +384,11 @@ def generate_transactions(df_funds, df_holdings, df_asset_valuations, start_date
                 "transaction_id": fake.uuid4(),
                 "fund_id": fund_id,
                 "asset_id": asset_id,
-                "transaction_date": tx_date,
+                "transaction_date": tx_date_dt, # Store as date object
                 "transaction_type": tx_type,
                 "amount": amount,
                 "units": units,
-                "price_per_unit": round(current_price_for_date, 2) if current_price_for_date else 0.0,
+                "price_per_unit": round(current_price_for_date, 2),
                 "currency": fund_currency,
                 "description": fake.sentence(nb_words=6)
             })
@@ -416,7 +402,7 @@ def generate_transactions(df_funds, df_holdings, df_asset_valuations, start_date
                 fund_conceptual_balances[fund_id]["assets_value"] -= amount
             elif tx_type in ["Dividend", "Interest", "Distribution"]:
                 fund_conceptual_balances[fund_id]["cash"] += amount
-            elif tx_type in ["Fee", "Expense", "Capital Call"]: # Capital Call means more cash comes in for PE/FoF
+            elif tx_type in ["Fee", "Expense", "Capital Call"]:
                  if tx_type == "Capital Call":
                     fund_conceptual_balances[fund_id]["cash"] += amount
                  else:
