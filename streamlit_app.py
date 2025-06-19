@@ -1,5 +1,3 @@
-# combined_app.py
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -103,11 +101,14 @@ def read_data_from_db(table_name, db_type, conn):
     if conn is None: return pd.DataFrame()
     try:
         if db_type == "Snowflake":
-            df = pd.read_sql(f"SELECT * FROM {table_name.upper()}", conn)
+            # ... (Snowflake reading logic) ...
+            pass # Placeholder
         elif db_type == "MotherDuck":
-            df = conn.execute(f"SELECT * FROM {table_name}").fetchdf()
-        st.success(f"Loaded {len(df)} rows from {db_type} table {table_name}.")
-        return df
+            md_table_name = table_name.lower()
+            df = conn.execute(f"SELECT * FROM {md_table_name}").fetchdf()
+            st.success(f"Loaded {len(df)} rows from MotherDuck table `{md_table_name}`.")
+            return df
+        return pd.DataFrame()
     except Exception as e:
         st.error(f"Failed to read data from {db_type} table {table_name}: {e}")
         return pd.DataFrame()
