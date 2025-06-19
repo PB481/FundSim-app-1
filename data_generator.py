@@ -316,24 +316,26 @@ def generate_transactions(df_funds, df_holdings, df_asset_valuations, start_date
             temp_series_raw_index = df_asset_valuations_indexed.loc[asset_id, 'price_or_value']
             
             if not temp_series_raw_index.empty:
-                # Force index to be a DatetimeIndex and remove any existing timezone info.
-                # This makes it a "naive" DatetimeIndex which tz_localize expects.
-                cleaned_index_naive = pd.to_datetime(temp_series_raw_index.index).tz_localize(None)
-                cleaned_index_naive = cleaned_index_naive[~pd.isnull(cleaned_index_naive)]
+                try:
+                    # Convert the index to datetime, localize to naive, and clean
+                    index_as_datetime = pd.to_datetime(pd.Index(temp_series_raw_index.index), errors='coerce')
+                    index_as_datetime = index_as_datetime.tz_localize(None)
+                    index_as_datetime = index_as_datetime[~pd.isnull(index_as_datetime)]
                 
-                # Now, localize the cleaned, naive index to london_tz.
-                # Use errors='coerce' here to turn any unlocalizable dates into NaT,
-                # which will then be dropped by .dropna().
-                localized_index = cleaned_index_naive.tz_localize(london_tz, errors='coerce')
+                    # Localize to London timezone
+                    london_tz = pytz.timezone('Europe/London')
+                    localized_index = index_as_datetime.tz_localize(london_tz, errors='coerce')
+                    # Set the new localized index to the series, drop any NaT
+                    asset_valuation_series = temp_series_raw_index.set_axis(localized_index).dropna()
+                    # Filter based on acquisition and end date
+                    asset_valuation_series = asset_valuation_series[
+                    (asset_valuation_series.index.date >= holding["acquisition_date"])
+                    & (asset_valuation_series.index.date <= end_date_transactions)
+                    ].sort_index()
                 
-                # Set the new localized index to the series, and drop any NaT values
-                asset_valuation_series = temp_series_raw_index.set_axis(localized_index).dropna()
-            
-            # Filter the series using the (now properly localized) index
-            asset_valuation_series = asset_valuation_series[
-                (asset_valuation_series.index.date >= holding["acquisition_date"]) &
-                (asset_valuation_series.index.date <= end_date_transactions)
-            ].sort_index() # Crucial for asof to work correctly
+                except Exception as e:
+                    print(f"Error processing asset valuation index for asset_id {asset_id}: {e}")
+                    asset_valuation_series = pd.Series(dtype=float)
 
         # If asset_valuation_series is empty after filtering, assign a default price.
         default_price_fallback = 100.0 
