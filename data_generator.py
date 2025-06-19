@@ -114,13 +114,15 @@ def generate_asset_master(asset_universe, start_date, end_date, price_variance=0
     assets_data = []
     asset_prices = {} # To store time series data
 
-    # Timezone aware start/end dates
+    # Use naive datetimes for internal price generation to simplify later comparison
+    # We will not localize here. London timezone used only for date_range creation for consistent days.
     london_tz = pytz.timezone('Europe/London')
-    start_dt = london_tz.localize(datetime.combine(start_date, datetime.min.time()))
-    end_dt = london_tz.localize(datetime.combine(end_date, datetime.min.time()))
+    start_dt_naive = datetime.combine(start_date, datetime.min.time())
+    end_dt_naive = datetime.combine(end_date, datetime.min.time())
     
-    # Generate prices for every day from start_dt to end_dt
-    date_range = pd.date_range(start=start_dt, end=end_dt, freq='D', tz=london_tz)
+    # Generate prices for every day from start_dt to end_dt using a naive date range
+    # freq='D' on naive datetimes works fine for daily increments.
+    date_range_naive = pd.date_range(start=start_dt_naive, end=end_dt_naive, freq='D')
 
     for asset_type, assets in asset_universe.items():
         for asset_name in assets:
@@ -150,7 +152,7 @@ def generate_asset_master(asset_universe, start_date, end_date, price_variance=0
             # Generate price history for this asset
             current_price = initial_val
             daily_prices = []
-            for _ in date_range: # Loop through each date
+            for _ in date_range_naive: # Loop through each date
                 if "ET" in asset_type or "FX" in asset_type or "Crypto" in asset_type:
                     change = np.random.normal(0, price_variance)
                     current_price *= (1 + change)
@@ -176,9 +178,9 @@ def generate_asset_master(asset_universe, start_date, end_date, price_variance=0
     for asset_id, prices in asset_prices.items():
         for i, price in enumerate(prices):
             # Ensure we don't go out of bounds if prices list is longer than date_range (shouldn't be)
-            if i < len(date_range): 
+            if i < len(date_range_naive): 
                 price_history_records.append({
-                    "valuation_date": date_range[i].date(), # Store as date object
+                    "valuation_date": date_range_naive[i].date(), # Store as date object (naive)
                     "asset_id": asset_id,
                     "price_or_value": price
                 })
@@ -333,7 +335,6 @@ def generate_transactions(df_funds, df_holdings, df_asset_valuations, start_date
                         localized_index = index_as_datetime # Keep it empty/naive
                     else:
                         # Localize to London timezone (without 'errors' argument, as it's removed in Pandas 2.0+)
-                        london_tz = pytz.timezone('Europe/London')
                         localized_index = index_as_datetime.tz_localize(london_tz) 
 
                     # Set the new localized index to the series, drop any NaT
