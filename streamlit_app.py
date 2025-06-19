@@ -60,13 +60,33 @@ def get_db_connection(db_type):
             return None
     elif db_type == "MotherDuck":
         # Install: pip install duckdb motherduck
-        import duckdb
+        import duckdb # Make sure this is installed: pip install duckdb motherduck
+
+def get_db_connection(db_type):
+    if db_type == "Snowflake":
+        # ... (Snowflake connection logic from previous code) ...
+        pass # Placeholder for brevity, assuming it's already there
+    elif db_type == "MotherDuck":
         try:
-            conn = duckdb.connect()
-            conn.execute(f"INSTALL motherduck; LOAD motherduck; SET motherduck.token = '{st.secrets['motherduck']['token']}';")
+            # Get token securely from Streamlit secrets
+            md_token = st.secrets["motherduck"]["token"]
+            
+            # Connect to MotherDuck. 
+            # You can optionally specify a database name, e.g., "md:my_database_name"
+            # If you don't specify one, it often defaults to 'my_db' if you have one.
+            # Using ?motherduck_token= ensures the token is passed
+            conn = duckdb.connect(f'md:?motherduck_token={md_token}')
+            
+            # Optionally, you can set the token as a session variable if you prefer
+            # conn.execute(f"SET motherduck.token = '{md_token}';") # If connecting without token in string
+
+            # Load MotherDuck extension (required for cloud access)
+            conn.execute("INSTALL motherduck; LOAD motherduck;") 
+            
             return conn
         except Exception as e:
             st.error(f"MotherDuck connection failed: {e}")
+            st.info("Ensure `motherduck_token` is set correctly in `.streamlit/secrets.toml` and `duckdb` and `motherduck` packages are installed.")
             return None
     return None
 
