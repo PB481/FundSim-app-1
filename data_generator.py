@@ -280,6 +280,11 @@ def generate_funds_and_holdings(num_funds, fund_type_config, df_assets_master, s
     return pd.DataFrame(funds), pd.DataFrame(holdings)
 
 
+# data_generator.py - Focus on the generate_transactions function
+
+# ... (rest of the file content before generate_transactions) ...
+
+
 def generate_transactions(df_funds, df_holdings, df_asset_valuations, start_date_transactions, end_date_transactions):
     """
     Generates synthetic transaction data for holdings.
@@ -312,24 +317,24 @@ def generate_transactions(df_funds, df_holdings, df_asset_valuations, start_date
         # Check if asset_id exists in the multi-index before trying to slice
         if asset_id in df_asset_valuations_indexed.index:
             # Extract the series for the specific asset
-            temp_series = df_asset_valuations_indexed.loc[asset_id, 'price_or_value']
+            temp_series_raw_index = df_asset_valuations_indexed.loc[asset_id, 'price_or_value']
             
-            # Ensure the index is a DatetimeIndex and then localize it
-            # Use .index.tz_convert(None) if it was *already* localized from some prior operation,
-            # then .tz_localize(). But here, it's safer to assume it's naive first.
-            if not temp_series.empty:
-                # Ensure the index is DatetimeIndex and then localize it.
-                # If the index is already a DatetimeIndex of dtype 'datetime64[ns]', 
-                # then tz_localize can be called directly.
-                # If it's 'object' type (e.g., if dates were strings), pd.to_datetime helps.
-                # The issue is often if it was already localized implicitly.
+            if not temp_series_raw_index.empty:
+                # IMPORTANT FIX: Ensure the index is a naive datetime index before localizing.
+                # If it's already timezone-aware, convert it to UTC and then to naive, then localize.
+                # This ensures we always start from a known naive state for tz_localize.
                 
-                # Check if the index is already timezone-aware
-                if temp_series.index.tz is None:
-                    asset_valuation_series = temp_series.set_axis(temp_series.index.tz_localize(london_tz, errors='coerce'))
-                else:
-                    # If it's already timezone-aware, convert it to our target timezone
-                    asset_valuation_series = temp_series.set_axis(temp_series.index.tz_convert(london_tz))
+                # Convert index to datetime (if not already) and then to naive if it's tz-aware
+                cleaned_index = pd.to_datetime(temp_series_raw_index.index)
+                if cleaned_index.tz is not None:
+                    # If already timezone-aware, convert to UTC and then remove timezone
+                    cleaned_index = cleaned_index.tz_convert('UTC').tz_localize(None)
+                
+                # Now, localize the cleaned, naive index to london_tz
+                localized_index = cleaned_index.tz_localize(london_tz, errors='coerce')
+                
+                # Set the new localized index to the series
+                asset_valuation_series = temp_series_raw_index.set_axis(localized_index)
             
             asset_valuation_series = asset_valuation_series[
                 (asset_valuation_series.index.date >= holding["acquisition_date"]) &
@@ -343,6 +348,7 @@ def generate_transactions(df_funds, df_holdings, df_asset_valuations, start_date
         if holding["acquisition_date"] >= start_date_transactions:
             # Get acquisition price: prefer exact date, then asof, then default
             # Convert acquisition_date to a timezone-aware Timestamp for consistent comparison
+            # Ensure the timestamp used for lookup is also localized consistently
             acquisition_price_ts = london_tz.localize(datetime.combine(holding["acquisition_date"], datetime.min.time()))
             
             acquisition_price = asset_valuation_series.get(acquisition_price_ts, None)
