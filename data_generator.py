@@ -243,6 +243,7 @@ def generate_funds_and_holdings(num_funds, fund_type_config, df_assets_master, s
             elif asset_category == "Loan" and loan_assets: asset_choice = random.choice(loan_assets)
             elif asset_category == "HardToPrice" and hard_to_price_assets: asset_choice = random.choice(hard_to_price_assets)
             elif asset_category == "FundOfFunds" and potential_underlying_funds:
+                # For FoF, select another *synthetic fund* as a holding
                 asset_choice = random.choice(potential_underlying_funds)
             
             # Ensure unique assets for each fund's holdings for simplicity, and check if asset_choice was successfully made
@@ -278,11 +279,6 @@ def generate_funds_and_holdings(num_funds, fund_type_config, df_assets_master, s
                 })
 
     return pd.DataFrame(funds), pd.DataFrame(holdings)
-
-
-# data_generator.py - Focus on the generate_transactions function
-
-# ... (rest of the file content before generate_transactions) ...
 
 
 def generate_transactions(df_funds, df_holdings, df_asset_valuations, start_date_transactions, end_date_transactions):
@@ -330,75 +326,31 @@ def generate_transactions(df_funds, df_holdings, df_asset_valuations, start_date
                     # If already timezone-aware, convert to UTC and then remove timezone
                     cleaned_index = cleaned_index.tz_convert('UTC').tz_localize(None)
                 
-                # Ensure cleaned_index is a DatetimeIndex
-                if not isinstance(cleaned_index, pd.DatetimeIndex):
-                    print(f"Warning: Index for asset {asset_id} is not a DatetimeIndex. Attempting conversion.")
-                    cleaned_index = pd.to_datetime(cleaned_index, errors='coerce')
-                    # Check if conversion resulted in NaT values (failed conversions)
-                    if cleaned_index.isnull().any():
-                        print(f"Warning: pd.to_datetime failed for some index values in asset {asset_id}. Skipping localization.")
-                        # If conversion failed, proceed with the non-localized index
-                        localized_index = cleaned_index # Keep NaT values if any
-                    else:
-                        try:
-                            # Now, localize the cleaned, naive index to london_tz
-                            localized_index = cleaned_index.tz_localize(london_tz, errors='coerce')
-                        except Exception as e:
-                            print(f"Warning: Error localizing index for asset {asset_id}: {e}. Skipping localization.")
-                            localized_index = cleaned_index # Fallback to non-localized if error
-                else:
-                    try:
-                        # Now, localize the cleaned, naive index to london_tz
-                        localized_index = cleaned_index.tz_localize(london_tz, errors='coerce')
-                    except Exception as e:
-                        print(f"Warning: Error localizing index for asset {asset_id}: {e}. Skipping localization.")
-                        localized_index = cleaned_index # Fallback to non-localized if error
-
+                # Now, localize the cleaned, naive index to london_tz
+                localized_index = cleaned_index.tz_localize(london_tz, errors='coerce')
+                
                 # Set the new localized index to the series, dropping any NaT values if they exist
                 asset_valuation_series = temp_series_raw_index.set_axis(localized_index).dropna()
             
-            # Filter the series using the (potentially localized) index
-            # Use .tz_convert('UTC').tz_localize(None) for comparison if asset_valuation_series index is localized
-            if asset_valuation_series.index.tz is not None:
-                filtered_series = asset_valuation_series[
-                    (asset_valuation_series.index.tz_convert('UTC').tz_localize(None).date >= holding["acquisition_date"]) &
-                    (asset_valuation_series.index.tz_convert('UTC').tz_localize(None).date <= end_date_transactions)
-                ]
-            else:
-                filtered_series = asset_valuation_series[
-                    (asset_valuation_series.index.date >= holding["acquisition_date"]) &
-                    (asset_valuation_series.index.date <= end_date_transactions)
-                ]
-            asset_valuation_series = filtered_series.sort_index() # Crucial for asof to work correctly
+            asset_valuation_series = asset_valuation_series[
+                (asset_valuation_series.index.date >= holding["acquisition_date"]) &
+                (asset_valuation_series.index.date <= end_date_transactions)
+            ].sort_index() # Crucial for asof to work correctly
 
         # If asset_valuation_series is empty after filtering, assign a default price.
         default_price_fallback = 100.0 
 
         # --- Initial acquisition transaction (if applicable) ---
-        # Ensure comparison dates are timezone-aware if asset_valuation_series index is timezone-aware
-        acquisition_date_compare = holding["acquisition_date"]
-        start_date_transactions_compare = start_date_transactions
-        
-        if asset_valuation_series.index.tz is not None:
-             acquisition_date_compare = london_tz.localize(datetime.combine(holding["acquisition_date"], datetime.min.time()))
-             start_date_transactions_compare = london_tz.localize(datetime.combine(start_date_transactions, datetime.min.time()))
-
-
-        if acquisition_date_compare >= start_date_transactions_compare:
+        if holding["acquisition_date"] >= start_date_transactions:
             # Get acquisition price: prefer exact date, then asof, then default
-            # Convert acquisition_date to a timezone-aware Timestamp for consistent comparison if index is localized
-            acquisition_price_ts = holding["acquisition_date"]
-            if asset_valuation_series.index.tz is not None:
-                acquisition_price_ts = london_tz.localize(datetime.combine(holding["acquisition_date"], datetime.min.time()))
+            # Convert acquisition_date to a timezone-aware Timestamp for consistent comparison
+            # Ensure the timestamp used for lookup is also localized consistently
+            acquisition_price_ts = london_tz.localize(datetime.combine(holding["acquisition_date"], datetime.min.time()))
             
             acquisition_price = asset_valuation_series.get(acquisition_price_ts, None)
 
             if acquisition_price is None or pd.isna(acquisition_price): # Also check for NaNs from .get()
                 if not asset_valuation_series.empty:
-                    # asof requires a timezone-aware timestamp if the index is timezone-aware
-                    if asset_valuation_series.index.tz is not None and not isinstance(acquisition_price_ts, pd.Timestamp) and not pd.isna(acquisition_price_ts):
-                         acquisition_price_ts = london_tz.localize(datetime.combine(acquisition_price_ts, datetime.min.time()))
-
                     asof_price = asset_valuation_series.asof(acquisition_price_ts)
                     if pd.isna(asof_price): # If asof also returns NaN
                         acquisition_price = asset_valuation_series.iloc[0] if not asset_valuation_series.empty else default_price_fallback
@@ -446,7 +398,7 @@ def generate_transactions(df_funds, df_holdings, df_asset_valuations, start_date
                 if not asset_valuation_series.empty:
                     # asof requires a timezone-aware timestamp if the index is timezone-aware
                     if asset_valuation_series.index.tz is not None and not isinstance(tx_date_ts, pd.Timestamp) and not pd.isna(tx_date_ts):
-                         tx_date_ts = london_tz.localize(datetime.combine(tx_date_ts, datetime.min.time()))
+                        tx_date_ts = london_tz.localize(datetime.combine(tx_date_ts, datetime.min.time()))
 
                     asof_price = asset_valuation_series.asof(tx_date_ts)
                     if pd.isna(asof_price):
@@ -469,103 +421,6 @@ def generate_transactions(df_funds, df_holdings, df_asset_valuations, start_date
                 "amount": amount,
                 "units": units,
                 "price_per_unit": round(current_price_for_date, 2) if current_price_for_date is not None else None,
-                "currency": fund_currency,
-                "description": fake.sentence(nb_words=6)
-            })
-
-            # Update conceptual balance (very simplified)
-            if tx_type == "Buy":
-                fund_conceptual_balances[fund_id]["cash"] -= amount
-                fund_conceptual_balances[fund_id]["assets_value"] += amount
-            elif tx_type == "Sell":
-                fund_conceptual_balances[fund_id]["cash"] += amount
-                fund_conceptual_balances[fund_id]["assets_value"] -= amount
-            elif tx_type in ["Dividend", "Interest", "Distribution"]:
-                fund_conceptual_balances[fund_id]["cash"] += amount
-            elif tx_type in ["Fee", "Expense", "Capital Call"]:
-                 if tx_type == "Capital Call":
-                    fund_conceptual_balances[fund_id]["cash"] += amount
-                 else:
-                    fund_conceptual_balances[fund_id]["cash"] -= amount
-
-    return pd.DataFrame(transactions)
-            ].sort_index() # Crucial for asof to work correctly
-
-        # If asset_valuation_series is empty after filtering, assign a default price.
-        default_price_fallback = 100.0 
-
-        # --- Initial acquisition transaction (if applicable) ---
-        if holding["acquisition_date"] >= start_date_transactions:
-            # Get acquisition price: prefer exact date, then asof, then default
-            # Convert acquisition_date to a timezone-aware Timestamp for consistent comparison
-            # Ensure the timestamp used for lookup is also localized consistently
-            acquisition_price_ts = london_tz.localize(datetime.combine(holding["acquisition_date"], datetime.min.time()))
-            
-            acquisition_price = asset_valuation_series.get(acquisition_price_ts, None)
-
-            if acquisition_price is None or pd.isna(acquisition_price): # Also check for NaNs from .get()
-                if not asset_valuation_series.empty:
-                    asof_price = asset_valuation_series.asof(acquisition_price_ts)
-                    if pd.isna(asof_price): # If asof also returns NaN
-                        acquisition_price = asset_valuation_series.iloc[0] if not asset_valuation_series.empty else default_price_fallback
-                    else:
-                        acquisition_price = asof_price
-                else: # Series was empty to begin with
-                    acquisition_price = default_price_fallback
-
-            initial_units = (fund_conceptual_balances[fund_id]["cash"] * holding["allocation_percentage"]) / acquisition_price if acquisition_price > 0 else 0
-            
-            if initial_units > 0:
-                transactions.append({
-                    "transaction_id": fake.uuid4(),
-                    "fund_id": fund_id,
-                    "asset_id": asset_id,
-                    "transaction_date": holding["acquisition_date"],
-                    "transaction_type": "Buy",
-                    "amount": round(initial_units * acquisition_price, 2), # Total cost
-                    "units": round(initial_units, 4),
-                    "price_per_unit": round(acquisition_price, 2),
-                    "currency": fund_currency,
-                    "description": f"Initial acquisition of {df_assets_master.loc[asset_id]['asset_name']}" # Use asset_name for description
-                })
-                fund_conceptual_balances[fund_id]["cash"] -= round(initial_units * acquisition_price, 2)
-                fund_conceptual_balances[fund_id]["assets_value"] += round(initial_units * acquisition_price, 2)
-        
-        # --- Simulate ongoing transactions (Buys/Sells/Income/Fees) ---
-        num_holding_transactions = random.randint(1, 10) # 1-10 transactions per holding over period
-        for _ in range(num_holding_transactions):
-            # Generate transaction date within the holding's relevant period
-            tx_date_dt = fake.date_between(start_date=max(holding["acquisition_date"], start_date_transactions), end_date=end_date_transactions)
-            tx_date_ts = london_tz.localize(datetime.combine(tx_date_dt, datetime.min.time())) # Convert to Timestamp for asof
-            
-            tx_type = random.choice(transaction_types)
-            amount = round(random.uniform(100, 500000), 2)
-            
-            # Determine price for transaction date using robust logic
-            current_price_for_date = asset_valuation_series.get(tx_date_ts, None)
-            if current_price_for_date is None or pd.isna(current_price_for_date): # Check for NaNs here too
-                if not asset_valuation_series.empty:
-                    asof_price = asset_valuation_series.asof(tx_date_ts)
-                    if pd.isna(asof_price):
-                        current_price_for_date = asset_valuation_series.iloc[0] if not asset_valuation_series.empty else default_price_fallback
-                    else:
-                        current_price_for_date = asof_price
-                else: # asset_valuation_series was empty
-                    current_price_for_date = default_price_fallback
-
-            units = 0
-            if current_price_for_date is not None and current_price_for_date > 0 and tx_type in ["Buy", "Sell"]:
-                units = round(amount / current_price_for_date, 4)
-            
-            transactions.append({
-                "transaction_id": fake.uuid4(),
-                "fund_id": fund_id,
-                "asset_id": asset_id,
-                "transaction_date": tx_date_dt, # Store as date object
-                "transaction_type": tx_type,
-                "amount": amount,
-                "units": units,
-                "price_per_unit": round(current_price_for_date, 2),
                 "currency": fund_currency,
                 "description": fake.sentence(nb_words=6)
             })
