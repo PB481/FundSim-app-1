@@ -7,6 +7,10 @@ from datetime import datetime, timedelta
 import pytz
 import altair as alt
 
+# Assuming you've created a file named `data_generator.py`
+# and moved the generation functions and config dictionaries into it.
+from data_generator import generate_asset_master, generate_funds_and_holdings, generate_transactions, ASSET_UNIVERSE, FUND_TYPE_CONFIG
+
 # --- Database Connection Configuration (IMPORTANT: Use Streamlit Secrets) ---
 # For Snowflake:
 # st.secrets["snowflake"]["user"]
