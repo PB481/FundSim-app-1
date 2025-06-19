@@ -289,6 +289,7 @@ def generate_transactions(df_funds, df_holdings, df_asset_valuations, start_date
     
     # Prepare valuation data for quick lookup
     # Ensure valuation_date is datetime and set as part of MultiIndex for efficient .loc access
+    # Convert 'valuation_date' to datetime *before* setting index
     df_asset_valuations['valuation_date'] = pd.to_datetime(df_asset_valuations['valuation_date'])
     df_asset_valuations_indexed = df_asset_valuations.set_index(['asset_id', 'valuation_date']).sort_index()
 
@@ -306,36 +307,55 @@ def generate_transactions(df_funds, df_holdings, df_asset_valuations, start_date
         fund_currency = df_funds.loc[df_funds["fund_id"] == fund_id, "currency"].iloc[0] # Get fund currency
         
         # Get historical prices for the asset
-        # Check if asset_id exists in the multi-index before trying to slice
         asset_valuation_series = pd.Series(dtype=float) # Initialize as empty Series
+        
+        # Check if asset_id exists in the multi-index before trying to slice
         if asset_id in df_asset_valuations_indexed.index:
-            asset_valuation_series = df_asset_valuations_indexed.loc[asset_id, 'price_or_value']
-            # Ensure the series index is datetime and apply timezone for asof comparison
-            asset_valuation_series.index = pd.to_datetime(asset_valuation_series.index).tz_localize(london_tz, errors='coerce')
-            # Filter for relevant dates (from acquisition to end of transaction period)
+            # Extract the series for the specific asset
+            temp_series = df_asset_valuations_indexed.loc[asset_id, 'price_or_value']
+            
+            # Ensure the index is a DatetimeIndex and then localize it
+            # Use .index.tz_convert(None) if it was *already* localized from some prior operation,
+            # then .tz_localize(). But here, it's safer to assume it's naive first.
+            if not temp_series.empty:
+                # Ensure the index is DatetimeIndex and then localize it.
+                # If the index is already a DatetimeIndex of dtype 'datetime64[ns]', 
+                # then tz_localize can be called directly.
+                # If it's 'object' type (e.g., if dates were strings), pd.to_datetime helps.
+                # The issue is often if it was already localized implicitly.
+                
+                # Check if the index is already timezone-aware
+                if temp_series.index.tz is None:
+                    asset_valuation_series = temp_series.set_axis(temp_series.index.tz_localize(london_tz, errors='coerce'))
+                else:
+                    # If it's already timezone-aware, convert it to our target timezone
+                    asset_valuation_series = temp_series.set_axis(temp_series.index.tz_convert(london_tz))
+            
             asset_valuation_series = asset_valuation_series[
                 (asset_valuation_series.index.date >= holding["acquisition_date"]) &
                 (asset_valuation_series.index.date <= end_date_transactions)
             ].sort_index() # Crucial for asof to work correctly
 
         # If asset_valuation_series is empty after filtering, assign a default price.
-        # This can happen if the asset's inception_date is after the transaction period.
         default_price_fallback = 100.0 
 
         # --- Initial acquisition transaction (if applicable) ---
         if holding["acquisition_date"] >= start_date_transactions:
             # Get acquisition price: prefer exact date, then asof, then default
-            acquisition_price_ts = pd.Timestamp(holding["acquisition_date"], tz=london_tz)
+            # Convert acquisition_date to a timezone-aware Timestamp for consistent comparison
+            acquisition_price_ts = london_tz.localize(datetime.combine(holding["acquisition_date"], datetime.min.time()))
+            
             acquisition_price = asset_valuation_series.get(acquisition_price_ts, None)
 
-            if acquisition_price is None and not asset_valuation_series.empty:
-                asof_price = asset_valuation_series.asof(acquisition_price_ts)
-                if pd.isna(asof_price): # If asof also returns NaN
-                    acquisition_price = asset_valuation_series.iloc[0] if not asset_valuation_series.empty else default_price_fallback
-                else:
-                    acquisition_price = asof_price
-            elif acquisition_price is None: # Series was empty to begin with
-                acquisition_price = default_price_fallback
+            if acquisition_price is None or pd.isna(acquisition_price): # Also check for NaNs from .get()
+                if not asset_valuation_series.empty:
+                    asof_price = asset_valuation_series.asof(acquisition_price_ts)
+                    if pd.isna(asof_price): # If asof also returns NaN
+                        acquisition_price = asset_valuation_series.iloc[0] if not asset_valuation_series.empty else default_price_fallback
+                    else:
+                        acquisition_price = asof_price
+                else: # Series was empty to begin with
+                    acquisition_price = default_price_fallback
 
             initial_units = (fund_conceptual_balances[fund_id]["cash"] * holding["allocation_percentage"]) / acquisition_price if acquisition_price > 0 else 0
             
@@ -360,21 +380,22 @@ def generate_transactions(df_funds, df_holdings, df_asset_valuations, start_date
         for _ in range(num_holding_transactions):
             # Generate transaction date within the holding's relevant period
             tx_date_dt = fake.date_between(start_date=max(holding["acquisition_date"], start_date_transactions), end_date=end_date_transactions)
-            tx_date_ts = pd.Timestamp(tx_date_dt, tz=london_tz) # Convert to Timestamp for asof
+            tx_date_ts = london_tz.localize(datetime.combine(tx_date_dt, datetime.min.time())) # Convert to Timestamp for asof
             
             tx_type = random.choice(transaction_types)
             amount = round(random.uniform(100, 500000), 2)
             
             # Determine price for transaction date using robust logic
             current_price_for_date = asset_valuation_series.get(tx_date_ts, None)
-            if current_price_for_date is None and not asset_valuation_series.empty:
-                asof_price = asset_valuation_series.asof(tx_date_ts)
-                if pd.isna(asof_price):
-                    current_price_for_date = asset_valuation_series.iloc[0] if not asset_valuation_series.empty else default_price_fallback
-                else:
-                    current_price_for_date = asof_price
-            elif current_price_for_date is None:
-                current_price_for_date = default_price_fallback
+            if current_price_for_date is None or pd.isna(current_price_for_date): # Check for NaNs here too
+                if not asset_valuation_series.empty:
+                    asof_price = asset_valuation_series.asof(tx_date_ts)
+                    if pd.isna(asof_price):
+                        current_price_for_date = asset_valuation_series.iloc[0] if not asset_valuation_series.empty else default_price_fallback
+                    else:
+                        current_price_for_date = asof_price
+                else: # asset_valuation_series was empty
+                    current_price_for_date = default_price_fallback
 
             units = 0
             if current_price_for_date is not None and current_price_for_date > 0 and tx_type in ["Buy", "Sell"]:
