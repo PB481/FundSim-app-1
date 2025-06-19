@@ -319,6 +319,7 @@ def generate_transactions(df_funds, df_holdings, df_asset_valuations, start_date
                 # Force index to be a DatetimeIndex and remove any existing timezone info.
                 # This makes it a "naive" DatetimeIndex which tz_localize expects.
                 cleaned_index_naive = pd.to_datetime(temp_series_raw_index.index).tz_localize(None)
+                cleaned_index_naive = cleaned_index_naive[~pd.isnull(cleaned_index_naive)]
                 
                 # Now, localize the cleaned, naive index to london_tz.
                 # Use errors='coerce' here to turn any unlocalizable dates into NaT,
