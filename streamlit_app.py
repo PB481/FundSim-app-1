@@ -86,6 +86,7 @@ def write_data_to_db(df, table_name, db_type, conn):
         elif db_type == "MotherDuck":
             md_table_name = table_name.lower() 
             conn.execute(f"DROP TABLE IF EXISTS {md_table_name};")
+            conn.register("df_view", df)
             conn.execute(f"CREATE TABLE {md_table_name} AS SELECT * FROM df") 
             st.success(f"Successfully wrote {len(df)} rows to MotherDuck table `{md_table_name}`.")
             return True
